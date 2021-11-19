@@ -4,3 +4,4 @@ Program automatically carries out purchase/sale transactions in simulation on pr
 based on initial sum given. 
 Integration is also done with real world transactions using API given by IBKR.
 Note that all API is customized, so you probably need to change ports to use this. Take help from IBKR site.
+This is in no way a complete project.
