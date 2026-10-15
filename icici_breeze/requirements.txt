@@ -1,0 +1,2 @@
+breeze-connect>=1.0.69
+pandas>=1.3

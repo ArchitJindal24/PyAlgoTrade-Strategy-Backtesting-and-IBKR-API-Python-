@@ -1,0 +1,4 @@
+state_*.json
+*.csv
+.env
+__pycache__/
