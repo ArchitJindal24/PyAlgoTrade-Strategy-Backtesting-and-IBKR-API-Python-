@@ -22,6 +22,10 @@ import breeze_client as bc
 from strategy import BUY, SELL, add_sma, shares_for, signal
 
 
+def state_path(state_dir, symbol, live):
+    return os.path.join(state_dir, "state_%s_%s.json" % (symbol.upper(), "live" if live else "paper"))
+
+
 def load_state(path, capital):
     if os.path.exists(path):
         with open(path) as f:
@@ -34,6 +38,57 @@ def save_state(path, state):
     with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
     os.replace(tmp, path)
+
+
+def evaluate(breeze, symbol, sma_period, state, max_qty=1000):
+    """Compute today's signal from live data. Returns a dict describing the decision."""
+    code = bc.isec_code(breeze, symbol)
+    end = dt.datetime.now()
+    start = end - dt.timedelta(days=sma_period * 3 + 30)  # enough trading days for the SMA
+    df = bc.fetch_history(breeze, code, start, end, interval="1day")
+    price = bc.last_price(breeze, code)
+
+    # Replace/append today's candle with the live price so the SMA includes it.
+    today = dt.datetime.combine(dt.date.today(), dt.time())
+    df = df[df.index.normalize() < today]
+    df.loc[today, ["open", "high", "low", "close", "volume"]] = [price, price, price, price, 0]
+    data = add_sma(df, sma_period)
+    sma = data["sma"].iloc[-1]
+
+    action = signal(price, sma, state["qty"] > 0)
+    if action == BUY:
+        qty = min(shares_for(state["cash"], price), max_qty)
+    elif action == SELL:
+        qty = state["qty"]
+    else:
+        qty = 0
+    return {"symbol": symbol.upper(), "code": code, "price": price, "sma": sma,
+            "action": action, "qty": qty, "history": data}
+
+
+def record(state, action, qty, price, order_id=None):
+    """Update cash/position for a fill. Paper fills are assumed at the given price."""
+    if action == BUY:
+        state["cash"] -= qty * price
+        state["qty"] += qty
+    else:
+        state["cash"] += qty * price
+        state["qty"] = 0
+    state["trades"].append({
+        "time": dt.datetime.now().isoformat(timespec="seconds"),
+        "action": action, "qty": qty, "price": price, "order_id": order_id,
+    })
+    return state
+
+
+def execute(breeze, decision, state, path, live):
+    """Act on a decision from evaluate(): place the order if live, then save the state."""
+    order_id = None
+    if live:
+        order_id = bc.place_delivery_order(breeze, decision["code"], decision["action"], decision["qty"])
+    record(state, decision["action"], decision["qty"], decision["price"], order_id)
+    save_state(path, state)
+    return order_id
 
 
 def main():
@@ -52,63 +107,32 @@ def main():
         return
 
     mode = "live" if args.live else "paper"
-    state_path = os.path.join(args.state_dir, "state_%s_%s.json" % (args.symbol.upper(), mode))
-    state = load_state(state_path, args.capital)
+    path = state_path(args.state_dir, args.symbol, args.live)
+    state = load_state(path, args.capital)
 
     breeze = bc.connect()
-    code = bc.isec_code(breeze, args.symbol)
-
-    end = dt.datetime.now()
-    start = end - dt.timedelta(days=args.sma * 3 + 30)  # enough trading days for the SMA
-    df = bc.fetch_history(breeze, code, start, end, interval="1day")
-    price = bc.last_price(breeze, code)
-
-    # Replace/append today's candle with the live price so the SMA includes it.
-    today = dt.datetime.combine(dt.date.today(), dt.time())
-    df = df[df.index.normalize() < today]
-    df.loc[today, ["open", "high", "low", "close", "volume"]] = [price, price, price, price, 0]
-    data = add_sma(df, args.sma)
-    sma = data["sma"].iloc[-1]
-
-    holding = state["qty"] > 0
-    action = signal(price, sma, holding)
+    d = evaluate(breeze, args.symbol, args.sma, state, args.max_qty)
     print("[%s] %s (%s) price=%.2f SMA%d=%.2f qty=%d cash=%.2f -> %s"
-          % (mode.upper(), args.symbol, code, price, args.sma, sma, state["qty"], state["cash"], action))
+          % (mode.upper(), args.symbol, d["code"], d["price"], args.sma, d["sma"],
+             state["qty"], state["cash"], d["action"]))
 
-    if action == BUY:
-        qty = min(shares_for(state["cash"], price), args.max_qty)
-    elif action == SELL:
-        qty = state["qty"]
-    else:
+    if d["action"] not in (BUY, SELL):
         return
-    if qty <= 0:
+    if d["qty"] <= 0:
         print("Not enough cash for one share.")
         return
 
-    order_id = None
-    if args.live:
-        if not args.yes:
-            ok = input("Place REAL %s order for %d %s at ~Rs %.2f? [y/N] " % (action, qty, args.symbol, price))
-            if ok.strip().lower() != "y":
-                print("Cancelled.")
-                return
-        order_id = bc.place_delivery_order(breeze, code, action, qty)
-        print("Order placed: %s (check fill status in ICICI Direct before the next run)" % order_id)
+    if args.live and not args.yes:
+        ok = input("Place REAL %s order for %d %s at ~Rs %.2f? [y/N] "
+                   % (d["action"], d["qty"], args.symbol, d["price"]))
+        if ok.strip().lower() != "y":
+            print("Cancelled.")
+            return
 
-    # Paper fills are assumed at the current price. In live mode the actual fill
-    # may differ slightly; the state file records the price seen when ordering.
-    if action == BUY:
-        state["cash"] -= qty * price
-        state["qty"] += qty
-    else:
-        state["cash"] += qty * price
-        state["qty"] = 0
-    state["trades"].append({
-        "time": dt.datetime.now().isoformat(timespec="seconds"),
-        "action": action, "qty": qty, "price": price, "order_id": order_id,
-    })
-    save_state(state_path, state)
-    print("Equity: Rs %.2f (state saved to %s)" % (state["cash"] + state["qty"] * price, state_path))
+    order_id = execute(breeze, d, state, path, args.live)
+    if order_id:
+        print("Order placed: %s (check fill status in ICICI Direct before the next run)" % order_id)
+    print("Equity: Rs %.2f (state saved to %s)" % (state["cash"] + state["qty"] * d["price"], path))
 
 
 if __name__ == "__main__":

@@ -2,29 +2,55 @@
 
 A port of `BacktestingProgram.py` to Indian markets using ICICI Direct's free
 [Breeze API](https://api.icicidirect.com/breezeapi/documents/index.html).
-No PyAlgoTrade needed - just `pandas` and `breeze-connect`.
+No PyAlgoTrade needed.
+
+## Web app (easiest)
+
+**Windows:** double-click `start_app.bat`. **Mac/Linux:** run `./start_app.sh`.
+The first start creates a virtual environment and installs everything (needs
+Python 3.9+), then your browser opens the app at <http://localhost:8501>.
+
+- **Sidebar** - paste your API key and secret, click the link to get today's
+  session token, paste it, and press **Connect**. Credentials stay in memory
+  and are never written to disk.
+- **Backtest tab** - pick ICICI data (any NSE symbol), a CSV, or random sample
+  data; choose the SMA range, capital and costs. You get the return for every
+  SMA period against buy & hold, the price chart with each buy/sell, the
+  portfolio value over time, and CSV downloads.
+- **Trade tab** - check today's signal for a symbol and record a paper trade,
+  or switch on **Live trading** and tick the confirmation to send a real
+  delivery order. Cash, shares and trade history are kept per symbol and mode.
+
+The app only listens on your own computer (`localhost`), because it can place orders.
+
+## Files
 
 | File | What it does |
 |---|---|
+| `app.py` | The web app (Streamlit) |
 | `strategy.py` | The SMA rule: buy when close < SMA, sell when close > SMA |
 | `backtest.py` | Downloads NSE history from Breeze (or reads a CSV) and sweeps SMA periods 8-29 |
 | `trade.py` | Runs the strategy once on live prices - **paper trading by default**, real CNC orders with `--live` |
 | `breeze_client.py` | Login, historical data, quotes and order placement |
-| `test_strategy.py` | Offline tests with a fake Breeze client |
+| `test_strategy.py`, `test_app.py` | Offline tests with a fake Breeze client |
 
 Fixes compared with the original backtester: whole-share quantities, position
 size from *current* cash (not the starting amount), and trading costs.
 
-## Setup
+## Command-line setup
 
 1. Have an ICICI Direct trading + demat account.
 2. Register an app at <https://api.icicidirect.com/apiuser/home> to get an
    **API key** and **secret**. Under SEBI's retail algo rules you must also
    register the **static IP** you will trade from with ICICI.
-3. Install (Python 3.8+):
+3. Install into a virtual environment (Python 3.9+):
    ```
+   python -m venv .venv
+   .venv\Scripts\activate        # Windows  (Mac/Linux: source .venv/bin/activate)
    pip install -r requirements.txt
    ```
+   Installing `breeze-connect` into the system Python of some Linux distributions
+   fails with `AttributeError: install_layout`; a virtual environment avoids it.
 4. Every trading day, get a session token: open
    `https://api.icicidirect.com/apiuser/login?api_key=<your URL-encoded API key>`,
    log in, and copy the `apisession` value from the URL you are redirected to.
@@ -71,5 +97,5 @@ Things to know before using `--live`:
 ## Tests
 
 ```
-python -m unittest test_strategy
+python -m unittest test_strategy test_app
 ```

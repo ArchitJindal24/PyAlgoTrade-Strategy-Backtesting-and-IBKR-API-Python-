@@ -16,15 +16,16 @@ import pandas as pd
 from strategy import BUY, SELL, add_sma, shares_for, signal
 
 
-def run(df, period, cash=100000.0, cost_pct=0.12):
+def simulate(df, period, cash=100000.0, cost_pct=0.12):
     """Simulate the strategy. Signals use a bar's close and fill at the next bar's open.
 
     cost_pct is charged on each buy and sell (brokerage + STT + exchange fees + stamp duty + GST).
-    Returns (final_equity, trades DataFrame).
+    Returns (equity Series indexed like df, trades DataFrame, data with the 'sma' column).
     """
     data = add_sma(df, period)
     qty = 0
     trades = []
+    equity = []
     pending = None
 
     for ts, row in data.iterrows():
@@ -46,9 +47,26 @@ def run(df, period, cash=100000.0, cost_pct=0.12):
         s = signal(row["close"], row["sma"], qty > 0)
         if s in (BUY, SELL):
             pending = s
+        equity.append(cash + qty * row["close"])
 
-    equity = cash + qty * data["close"].iloc[-1]
-    return equity, pd.DataFrame(trades, columns=["datetime", "action", "qty", "price", "cash_after"])
+    trades = pd.DataFrame(trades, columns=["datetime", "action", "qty", "price", "cash_after"])
+    return pd.Series(equity, index=data.index, name="equity"), trades, data
+
+
+def run(df, period, cash=100000.0, cost_pct=0.12):
+    """Returns (final_equity, trades DataFrame)."""
+    equity, trades, _ = simulate(df, period, cash, cost_pct)
+    return equity.iloc[-1], trades
+
+
+def sweep(df, periods, cash=100000.0, cost_pct=0.12):
+    """Final equity, return and trade count for each SMA period."""
+    rows = []
+    for period in periods:
+        equity, trades = run(df, period, cash, cost_pct)
+        rows.append({"sma": period, "final_equity": equity,
+                     "return_pct": (equity / cash - 1) * 100, "trades": len(trades)})
+    return pd.DataFrame(rows)
 
 
 def load(args):
@@ -91,12 +109,10 @@ def main():
 
     periods = [args.sma] if args.sma else range(8, 30)
     print("SMA\tFinal equity (Rs)\tReturn\tTrades")
-    for period in periods:
-        equity, trades = run(df, period, args.cash, args.cost)
-        ret = (equity / args.cash - 1) * 100
-        print("%d\t%.2f\t\t%+.1f%%\t%d" % (period, equity, ret, len(trades)))
-        if args.show_trades and args.sma:
-            print(trades.to_string(index=False))
+    for r in sweep(df, periods, args.cash, args.cost).itertuples():
+        print("%d\t%.2f\t\t%+.1f%%\t%d" % (r.sma, r.final_equity, r.return_pct, r.trades))
+    if args.show_trades and args.sma:
+        print(run(df, args.sma, args.cash, args.cost)[1].to_string(index=False))
 
 
 if __name__ == "__main__":
