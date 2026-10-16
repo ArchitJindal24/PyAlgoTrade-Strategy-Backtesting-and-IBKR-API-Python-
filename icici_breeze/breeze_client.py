@@ -27,25 +27,33 @@ class BreezeError(RuntimeError):
     pass
 
 
-def login_url():
-    key = os.environ.get("BREEZE_API_KEY", "")
+def login_url(api_key=None):
+    key = api_key or os.environ.get("BREEZE_API_KEY", "")
     return LOGIN_URL + urllib.parse.quote_plus(key)
 
 
-def connect():
-    """Create an authenticated BreezeConnect session from environment variables."""
+def connect(api_key=None, api_secret=None, session_token=None):
+    """Create an authenticated BreezeConnect session.
+
+    Arguments that are not given are read from the environment variables.
+    """
     from breeze_connect import BreezeConnect
 
-    missing = [v for v in ("BREEZE_API_KEY", "BREEZE_API_SECRET", "BREEZE_SESSION_TOKEN")
-               if not os.environ.get(v)]
+    creds = {
+        "BREEZE_API_KEY": api_key or os.environ.get("BREEZE_API_KEY"),
+        "BREEZE_API_SECRET": api_secret or os.environ.get("BREEZE_API_SECRET"),
+        "BREEZE_SESSION_TOKEN": session_token or os.environ.get("BREEZE_SESSION_TOKEN"),
+    }
+    missing = [k for k, v in creds.items() if not v]
     if missing:
         raise BreezeError(
-            "Missing environment variables: %s\n"
-            "Get today's session token by logging in at:\n  %s" % (", ".join(missing), login_url()))
+            "Missing credentials: %s\n"
+            "Get today's session token by logging in at:\n  %s"
+            % (", ".join(missing), login_url(creds["BREEZE_API_KEY"])))
 
-    breeze = BreezeConnect(api_key=os.environ["BREEZE_API_KEY"])
-    breeze.generate_session(api_secret=os.environ["BREEZE_API_SECRET"],
-                            session_token=os.environ["BREEZE_SESSION_TOKEN"])
+    breeze = BreezeConnect(api_key=creds["BREEZE_API_KEY"])
+    breeze.generate_session(api_secret=creds["BREEZE_API_SECRET"],
+                            session_token=creds["BREEZE_SESSION_TOKEN"])
     return breeze
 
 

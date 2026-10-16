@@ -1,0 +1,9 @@
+[browser]
+gatherUsageStats = false
+
+[server]
+# Only reachable from this computer - the app can place real orders.
+address = "localhost"
+
+[client]
+toolbarMode = "minimal"
